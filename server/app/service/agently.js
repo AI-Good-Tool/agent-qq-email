@@ -10,35 +10,31 @@ const { DatabaseSync } = require('node:sqlite');
 
 const execFileAsync = promisify(execFile);
 const AUTH_LIFETIME_MS = 5 * 60 * 1000;
+const COLORS = [ '#17b26a', '#6e7ed8', '#e79a3b', '#2e9e89', '#a66dd4' ];
 
 class AgentlyService extends Service {
-  cliEnvironment() {
-    return {
-      ...process.env,
-      AGENTLY_WORKSPACE: this.config.agently.workspace,
-    };
+  cliEnvironment(workspace = this.config.agently.workspace) {
+    return { ...process.env, AGENTLY_WORKSPACE: workspace };
   }
 
-  async run(args, timeout = this.config.agently.timeout) {
+  async run(args, workspace = this.config.agently.workspace, timeout = this.config.agently.timeout) {
     const { stdout } = await execFileAsync(this.config.agently.cliPath, args, {
       timeout,
       maxBuffer: 10 * 1024 * 1024,
-      env: this.cliEnvironment(),
+      env: this.cliEnvironment(workspace),
     });
     return JSON.parse(stdout.trim());
   }
 
-  async listAllMessages() {
+  async listAllMessages(workspace, folder = 'inbox') {
     const messages = [];
     const seenCursors = new Set();
     let cursor;
-
     do {
-      const args = [ 'message', '+list', '--limit', '50' ];
+      const args = [ 'message', '+list', '--limit', '50', '--dir', folder ];
       if (cursor) args.push('--cursor', cursor);
-      const result = await this.run(args);
+      const result = await this.run(args, workspace);
       if (!result.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
-
       messages.push(...(result.data?.data || []));
       const pagination = result.data?.pagination;
       const nextCursor = pagination?.has_more ? pagination.next_cursor : null;
@@ -46,7 +42,6 @@ class AgentlyService extends Service {
       seenCursors.add(nextCursor);
       cursor = nextCursor;
     } while (cursor);
-
     return messages;
   }
 
@@ -57,115 +52,112 @@ class AgentlyService extends Service {
     const db = new DatabaseSync(file);
     db.exec(`
       PRAGMA journal_mode=WAL;
-      CREATE TABLE IF NOT EXISTS accounts (
+      PRAGMA foreign_keys=ON;
+      CREATE TABLE IF NOT EXISTS mail_connections (
         id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_synced_at INTEGER
+      );
+      CREATE TABLE IF NOT EXISTS mail_auth_workspaces (
+        workspace TEXT PRIMARY KEY,
+        connection_id TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_synced_at INTEGER,
+        FOREIGN KEY(connection_id) REFERENCES mail_connections(id) ON DELETE CASCADE
+      );
+      CREATE TABLE IF NOT EXISTS mail_aliases (
+        workspace TEXT NOT NULL,
+        alias_id TEXT NOT NULL,
+        connection_id TEXT NOT NULL,
         email TEXT NOT NULL,
         name TEXT NOT NULL,
         is_primary INTEGER NOT NULL,
-        synced_at INTEGER NOT NULL
+        synced_at INTEGER NOT NULL,
+        PRIMARY KEY(workspace, alias_id)
       );
-      CREATE TABLE IF NOT EXISTS messages (
-        id TEXT PRIMARY KEY,
-        account_id TEXT NOT NULL,
+      CREATE TABLE IF NOT EXISTS mail_messages (
+        workspace TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        folder TEXT NOT NULL,
+        alias_id TEXT NOT NULL,
         sender_name TEXT,
         sender_email TEXT,
+        recipients_json TEXT NOT NULL,
         subject TEXT,
         snippet TEXT,
         received_at TEXT,
         is_read INTEGER NOT NULL,
         has_attachments INTEGER NOT NULL,
-        synced_at INTEGER NOT NULL
+        synced_at INTEGER NOT NULL,
+        PRIMARY KEY(workspace, message_id, folder)
       );
-      CREATE INDEX IF NOT EXISTS idx_messages_account_received
-        ON messages(account_id, received_at DESC);
-      CREATE INDEX IF NOT EXISTS idx_messages_unread
-        ON messages(is_read, received_at DESC);
+      CREATE TABLE IF NOT EXISTS message_stars (
+        workspace TEXT NOT NULL,
+        message_id TEXT NOT NULL,
+        starred_at INTEGER NOT NULL,
+        PRIMARY KEY(workspace, message_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_mail_aliases_connection ON mail_aliases(connection_id, email);
+      CREATE INDEX IF NOT EXISTS idx_mail_messages_received ON mail_messages(folder, received_at DESC);
     `);
     this.app.agentMailDatabase = db;
     return db;
   }
 
-  resolveAccount(message, aliases, primary) {
+  ensureInitialWorkspace() {
+    const db = this.database();
+    if (db.prepare('SELECT COUNT(*) AS count FROM mail_auth_workspaces').get().count) return;
+    const now = Date.now();
+    db.prepare('INSERT INTO mail_connections (id, name, created_at) VALUES (?, ?, ?)')
+      .run('conn_codex', '已连接微信', now);
+    db.prepare('INSERT INTO mail_auth_workspaces (workspace, connection_id, created_at) VALUES (?, ?, ?)')
+      .run(this.config.agently.workspace, 'conn_codex', now);
+  }
+
+  resolveAlias(message, aliases) {
+    const primary = aliases.find(item => item.is_primary) || aliases[0];
     const recipient = (message.to || []).find(item => aliases.some(alias => alias.email === item.email));
     return aliases.find(alias => alias.email === recipient?.email) || primary;
   }
 
-  toDashboard(aliases, messages, source) {
-    const primary = aliases.find(item => item.is_primary) || aliases[0];
-    const sortedMessages = [ ...messages ].sort((left, right) =>
-      new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
-    const accounts = aliases.map((item, index) => ({
-      id: item.alias_id,
-      name: item.name || item.email,
-      email: item.email,
-      unread: sortedMessages.filter(message => !message.is_read
-        && this.resolveAccount(message, aliases, primary)?.alias_id === item.alias_id).length,
-      color: [ '#17b26a', '#6e7ed8', '#e79a3b', '#2e9e89' ][index % 4],
-      status: source === 'agently-cli' ? 'online' : 'cached',
-    }));
-    const emails = sortedMessages.map(item => ({
-      id: item.message_id,
-      sender: item.from?.name || item.from?.email || '未知发件人',
-      senderAddress: item.from?.email || '',
-      subject: item.subject || '(无主题)',
-      preview: item.snippet || '',
-      accountId: this.resolveAccount(item, aliases, primary)?.alias_id || '',
-      category: '通知',
-      receivedAt: new Date(item.created_at).getTime(),
-      isRead: item.is_read ? 1 : 0,
-      isStarred: 0,
-      hasAttachments: Boolean(item.has_attachments),
-    }));
-    const today = new Date().toDateString();
-    return {
-      accounts,
-      emails,
-      stats: {
-        total: emails.length,
-        unread: emails.filter(item => !item.isRead).length,
-        accounts: accounts.length,
-        today: emails.filter(item => new Date(item.receivedAt).toDateString() === today).length,
-      },
-      source,
-    };
-  }
-
-  saveSnapshot(aliases, messages) {
+  saveWorkspaceSnapshot(workspace, aliases, messages, folder) {
     const db = this.database();
-    const primary = aliases.find(item => item.is_primary) || aliases[0];
+    const workspaceRow = db.prepare('SELECT connection_id FROM mail_auth_workspaces WHERE workspace = ?').get(workspace);
+    if (!workspaceRow) throw new Error('授权工作区不存在。');
+    const connectionId = workspaceRow.connection_id;
     const now = Date.now();
     db.exec('BEGIN IMMEDIATE');
     try {
-      db.exec('DELETE FROM accounts; DELETE FROM messages;');
-      const addAccount = db.prepare(`
-        INSERT INTO accounts (id, email, name, is_primary, synced_at)
-        VALUES (?, ?, ?, ?, ?)
+      db.prepare('DELETE FROM mail_aliases WHERE workspace = ?').run(workspace);
+      db.prepare('DELETE FROM mail_messages WHERE workspace = ? AND folder = ?').run(workspace, folder);
+      const addAlias = db.prepare(`
+        INSERT INTO mail_aliases (workspace, alias_id, connection_id, email, name, is_primary, synced_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const item of aliases) {
-        addAccount.run(item.alias_id, item.email, item.name || item.email, item.is_primary ? 1 : 0, now);
+      for (const alias of aliases) {
+        addAlias.run(workspace, alias.alias_id, connectionId, alias.email,
+          alias.name || alias.email, alias.is_primary ? 1 : 0, now);
       }
-
       const addMessage = db.prepare(`
-        INSERT INTO messages (
-          id, account_id, sender_name, sender_email, subject, snippet,
-          received_at, is_read, has_attachments, synced_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO mail_messages (
+          workspace, message_id, folder, alias_id, sender_name, sender_email,
+          recipients_json, subject, snippet, received_at, is_read, has_attachments, synced_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-      for (const item of messages) {
-        const alias = this.resolveAccount(item, aliases, primary);
-        addMessage.run(
-          item.message_id,
-          alias?.alias_id || '',
-          item.from?.name || item.from?.email || '未知发件人',
-          item.from?.email || '',
-          item.subject || '(无主题)',
-          item.snippet || '',
-          item.created_at,
-          item.is_read ? 1 : 0,
-          item.has_attachments ? 1 : 0,
-          now,
-        );
+      for (const message of messages) {
+        const alias = this.resolveAlias(message, aliases);
+        addMessage.run(workspace, message.message_id, folder, alias?.alias_id || '',
+          message.from?.name || message.from?.email || '未知发件人', message.from?.email || '',
+          JSON.stringify(message.to || []), message.subject || '(无主题)', message.snippet || '',
+          message.created_at, message.is_read ? 1 : 0, message.has_attachments ? 1 : 0, now);
       }
+      const primary = aliases.find(item => item.is_primary) || aliases[0];
+      if (primary) {
+        db.prepare('UPDATE mail_connections SET name = ?, last_synced_at = ? WHERE id = ?')
+          .run(primary.name || primary.email.split('@')[0], now, connectionId);
+      }
+      db.prepare('UPDATE mail_auth_workspaces SET last_synced_at = ? WHERE workspace = ?').run(now, workspace);
       db.exec('COMMIT');
     } catch (error) {
       db.exec('ROLLBACK');
@@ -173,63 +165,193 @@ class AgentlyService extends Service {
     }
   }
 
-  loadSnapshot() {
-    const db = this.database();
-    const accountRows = db.prepare('SELECT * FROM accounts ORDER BY is_primary DESC, email').all();
-    if (!accountRows.length) return null;
-    const aliases = accountRows.map(item => ({
-      alias_id: item.id,
-      email: item.email,
-      name: item.name,
-      is_primary: Boolean(item.is_primary),
-    }));
-    const messages = db.prepare('SELECT * FROM messages ORDER BY received_at DESC').all().map(item => ({
-      message_id: item.id,
-      from: { name: item.sender_name, email: item.sender_email },
-      to: [ { email: aliases.find(alias => alias.alias_id === item.account_id)?.email || '' } ],
-      subject: item.subject,
-      snippet: item.snippet,
-      created_at: item.received_at,
-      is_read: Boolean(item.is_read),
-      has_attachments: Boolean(item.has_attachments),
-    }));
-    return this.toDashboard(aliases, messages, 'sqlite-cache');
+  async syncWorkspace(workspace, folder = 'inbox') {
+    const [ meResult, messages ] = await Promise.all([
+      this.run([ '+me' ], workspace),
+      this.listAllMessages(workspace, folder),
+    ]);
+    if (!meResult.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
+    this.saveWorkspaceSnapshot(workspace, meResult.data?.aliases || [], messages, folder);
   }
 
-  async dashboard() {
+  buildDashboard(folder, source) {
+    const db = this.database();
+    const connectionRows = db.prepare('SELECT * FROM mail_connections ORDER BY created_at').all();
+    const aliasRows = db.prepare(`
+      SELECT a.*, COALESCE(SUM(CASE WHEN m.is_read = 0 AND m.folder = 'inbox' THEN 1 ELSE 0 END), 0) AS unread
+      FROM mail_aliases a
+      LEFT JOIN mail_messages m ON m.workspace = a.workspace AND m.alias_id = a.alias_id
+      GROUP BY a.workspace, a.alias_id
+      ORDER BY a.connection_id, a.is_primary DESC, a.email
+    `).all();
+    const stars = new Set(db.prepare('SELECT workspace, message_id FROM message_stars').all()
+      .map(item => `${item.workspace}:${item.message_id}`));
+    const messageRows = db.prepare(`
+      SELECT * FROM mail_messages WHERE folder = ? ORDER BY received_at DESC
+    `).all(folder);
+
+    const accounts = aliasRows.map((item, index) => ({
+      id: `${item.workspace}:${item.alias_id}`,
+      aliasId: item.alias_id,
+      workspace: item.workspace,
+      connectionId: item.connection_id,
+      name: item.name || item.email,
+      email: item.email,
+      unread: Number(item.unread),
+      color: COLORS[index % COLORS.length],
+      status: source === 'agently-cli' ? 'online' : 'cached',
+    }));
+    const connections = connectionRows.map((item, index) => {
+      const linked = accounts.filter(account => account.connectionId === item.id);
+      return {
+        id: item.id,
+        name: item.name,
+        aliasCount: linked.length,
+        unread: linked.reduce((sum, account) => sum + account.unread, 0),
+        color: COLORS[index % COLORS.length],
+        status: linked.some(account => account.status === 'online') ? 'online' : 'cached',
+        aliases: linked,
+      };
+    });
+    const emails = messageRows.map(item => ({
+      id: `${item.workspace}:${item.message_id}`,
+      messageId: item.message_id,
+      workspace: item.workspace,
+      connectionId: accounts.find(account => account.workspace === item.workspace)?.connectionId || '',
+      sender: item.sender_name || item.sender_email || '未知发件人',
+      senderAddress: item.sender_email || '',
+      subject: item.subject || '(无主题)',
+      preview: item.snippet || '',
+      accountId: `${item.workspace}:${item.alias_id}`,
+      category: folder === 'sent' ? '已发送' : '通知',
+      receivedAt: new Date(item.received_at).getTime(),
+      isRead: item.is_read ? 1 : 0,
+      isStarred: stars.has(`${item.workspace}:${item.message_id}`) ? 1 : 0,
+      hasAttachments: Boolean(item.has_attachments),
+    }));
+    const contactMap = new Map();
+    for (const row of db.prepare("SELECT sender_name, sender_email FROM mail_messages WHERE folder = 'inbox' AND sender_email != '' ORDER BY received_at DESC").all()) {
+      if (!contactMap.has(row.sender_email)) contactMap.set(row.sender_email, { name: row.sender_name || row.sender_email, email: row.sender_email });
+    }
+    const today = new Date().toDateString();
+    return {
+      connections,
+      accounts,
+      emails,
+      contacts: Array.from(contactMap.values()),
+      stats: {
+        total: emails.length,
+        unread: emails.filter(item => !item.isRead).length,
+        accounts: connections.length,
+        aliases: accounts.length,
+        today: emails.filter(item => new Date(item.receivedAt).toDateString() === today).length,
+      },
+      source,
+      folder,
+    };
+  }
+
+  async dashboard(folder = 'inbox') {
+    if (![ 'inbox', 'sent' ].includes(folder)) folder = 'inbox';
+    this.ensureInitialWorkspace();
+    const workspaces = this.database().prepare('SELECT workspace FROM mail_auth_workspaces ORDER BY created_at').all();
+    let synced = 0;
+    for (const item of workspaces) {
+      try {
+        await this.syncWorkspace(item.workspace, folder);
+        synced++;
+      } catch (error) {
+        this.ctx.logger.warn('[agently] workspace %s sync failed: %s', item.workspace, error.message);
+      }
+    }
+    const dashboard = this.buildDashboard(folder, synced ? 'agently-cli' : 'sqlite-cache');
+    if (!synced && !dashboard.accounts.length) throw new Error('没有可用的 Agent Mail 授权。');
+    return dashboard;
+  }
+
+  assertWorkspace(workspace) {
+    if (!workspace || !this.database().prepare('SELECT 1 FROM mail_auth_workspaces WHERE workspace = ?').get(workspace)) {
+      throw new Error('邮箱授权工作区不存在。');
+    }
+  }
+
+  async readMessage(messageId, workspace) {
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(messageId)) throw new Error('无效的邮件标识。');
+    this.assertWorkspace(workspace);
+    const result = await this.run([ 'message', '+read', '--id', messageId ], workspace);
+    if (!result.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
+    return { ...result.data, workspace, source: 'agently-cli' };
+  }
+
+  setStar(messageId, workspace, starred) {
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(messageId)) throw new Error('无效的邮件标识。');
+    this.assertWorkspace(workspace);
+    const db = this.database();
+    if (starred) {
+      db.prepare('INSERT OR REPLACE INTO message_stars (workspace, message_id, starred_at) VALUES (?, ?, ?)')
+        .run(workspace, messageId, Date.now());
+    } else {
+      db.prepare('DELETE FROM message_stars WHERE workspace = ? AND message_id = ?').run(workspace, messageId);
+    }
+    return { ok: true, starred };
+  }
+
+  async mailAction(payload) {
+    const { action, workspace, body, confirmationToken } = payload;
+    this.assertWorkspace(workspace);
+    if (!body?.trim()) throw new Error('邮件正文不能为空。');
+    let args;
+    if (action === 'send') {
+      const recipients = Array.isArray(payload.to) ? payload.to : String(payload.to || '').split(/[;,\s]+/).filter(Boolean);
+      if (!recipients.length || !payload.subject?.trim()) throw new Error('请填写收件人和主题。');
+      args = [ 'message', '+send' ];
+      for (const recipient of recipients) args.push('--to', recipient);
+      args.push('--subject', payload.subject.trim(), '--body', body.trim(), '--body-format', 'plain');
+    } else if (action === 'reply') {
+      if (!/^msg_[A-Za-z0-9_-]+$/.test(payload.messageId || '')) throw new Error('无效的回复邮件标识。');
+      args = [ 'message', '+reply', '--id', payload.messageId, '--body', body.trim(), '--body-format', 'plain' ];
+    } else {
+      throw new Error('不支持的邮件操作。');
+    }
+    if (confirmationToken) args.push('--confirmation-token', confirmationToken);
+    return this.run(args, workspace);
+  }
+
+  async registerAuthWorkspace(workspace, targetConnectionId) {
+    const db = this.database();
+    let connectionId = targetConnectionId;
+    if (connectionId && !db.prepare('SELECT 1 FROM mail_connections WHERE id = ?').get(connectionId)) {
+      throw new Error('目标微信账号不存在。');
+    }
+    if (!connectionId) {
+      connectionId = `conn_${randomUUID()}`;
+      db.prepare('INSERT INTO mail_connections (id, name, created_at) VALUES (?, ?, ?)')
+        .run(connectionId, '新微信账号', Date.now());
+    }
+    db.prepare(`
+      INSERT OR REPLACE INTO mail_auth_workspaces (workspace, connection_id, created_at)
+      VALUES (?, ?, ?)
+    `).run(workspace, connectionId, Date.now());
     try {
-      const [ meResult, messages ] = await Promise.all([ this.run([ '+me' ]), this.listAllMessages() ]);
-      if (!meResult.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
-      const aliases = meResult.data?.aliases || [];
-      this.saveSnapshot(aliases, messages);
-      return this.toDashboard(aliases, messages, 'agently-cli');
+      await this.syncWorkspace(workspace, 'inbox');
     } catch (error) {
-      const cached = this.loadSnapshot();
-      if (cached) return cached;
+      db.prepare('DELETE FROM mail_auth_workspaces WHERE workspace = ?').run(workspace);
+      if (!targetConnectionId) db.prepare('DELETE FROM mail_connections WHERE id = ?').run(connectionId);
       throw error;
     }
   }
 
-  async readMessage(messageId) {
-    if (!/^msg_[A-Za-z0-9_-]+$/.test(messageId)) throw new Error('无效的邮件标识。');
-    const result = await this.run([ 'message', '+read', '--id', messageId ]);
-    if (!result.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
-    return { ...result.data, source: 'agently-cli' };
-  }
-
-  async startAuth() {
+  async startAuth(targetConnectionId = null) {
     const now = Date.now();
     for (const [ id, item ] of this.app.authSessions) {
-      if (item.status !== 'pending' && now - item.createdAt > AUTH_LIFETIME_MS) {
-        this.app.authSessions.delete(id);
-      }
+      if (item.status !== 'pending' && item.status !== 'syncing' && now - item.createdAt > AUTH_LIFETIME_MS) this.app.authSessions.delete(id);
     }
-
-    const active = Array.from(this.app.authSessions.values()).find(item => item.status === 'pending');
+    const active = Array.from(this.app.authSessions.values()).find(item => [ 'pending', 'syncing' ].includes(item.status));
     if (active) return active;
-
     const session = {
       id: randomUUID(),
+      workspace: `yunyouhe-${randomUUID()}`,
+      targetConnectionId,
       status: 'pending',
       authUrl: null,
       error: null,
@@ -239,9 +361,8 @@ class AgentlyService extends Service {
       expiryTimer: null,
     };
     this.app.authSessions.set(session.id, session);
-
     const child = spawn(this.config.agently.cliPath, [ 'auth', 'login' ], {
-      env: this.cliEnvironment(),
+      env: this.cliEnvironment(session.workspace),
       stdio: [ 'ignore', 'pipe', 'pipe' ],
     });
     session.child = child;
@@ -251,16 +372,24 @@ class AgentlyService extends Service {
     };
     child.stdout.on('data', consume);
     child.stderr.on('data', consume);
-    child.on('error', error => {
-      session.status = 'failed';
-      session.error = error.message;
-    });
-    child.on('exit', code => {
+    child.on('error', error => { session.status = 'failed'; session.error = error.message; });
+    child.on('exit', async code => {
       if (session.expiryTimer) clearTimeout(session.expiryTimer);
       session.child = null;
       if (session.status !== 'pending') return;
-      session.status = code === 0 ? 'confirmed' : 'failed';
-      if (code !== 0) session.error = `agently-cli exited with ${code}`;
+      if (code !== 0) {
+        session.status = 'failed';
+        session.error = `agently-cli exited with ${code}`;
+        return;
+      }
+      session.status = 'syncing';
+      try {
+        await this.registerAuthWorkspace(session.workspace, session.targetConnectionId);
+        session.status = 'confirmed';
+      } catch (error) {
+        session.status = 'failed';
+        session.error = error.message;
+      }
     });
     session.expiryTimer = setTimeout(() => {
       if (session.status !== 'pending') return;
@@ -269,7 +398,6 @@ class AgentlyService extends Service {
       if (session.child && !session.child.killed) session.child.kill();
     }, AUTH_LIFETIME_MS);
     session.expiryTimer.unref();
-
     for (let attempt = 0; attempt < 30 && !session.authUrl && session.status === 'pending'; attempt++) {
       await new Promise(resolve => setTimeout(resolve, 100));
     }

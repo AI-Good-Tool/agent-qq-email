@@ -5,11 +5,13 @@ function backendUrl(path: string) {
 
 export async function GET(request: Request) {
   const id = new URL(request.url).searchParams.get('id');
+  const workspace = new URL(request.url).searchParams.get('workspace');
   if (!id || !/^msg_[A-Za-z0-9_-]+$/.test(id)) {
     return Response.json({ code: 'INVALID_MESSAGE_ID', message: '无效的邮件标识。' }, { status: 400 });
   }
 
-  const url = backendUrl(`/api/messages/${encodeURIComponent(id)}`);
+  if (!workspace) return Response.json({ code: 'INVALID_WORKSPACE', message: '缺少邮箱授权工作区。' }, { status: 400 });
+  const url = backendUrl(`/api/messages/${encodeURIComponent(id)}?workspace=${encodeURIComponent(workspace)}`);
   if (!url) {
     return Response.json(
       { code: 'AGENT_MAIL_BACKEND_NOT_CONFIGURED', message: 'Agent Mail 本地服务尚未连接。' },

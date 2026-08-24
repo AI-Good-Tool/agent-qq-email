@@ -5,7 +5,10 @@ export async function GET(request: Request) {
   const backend = process.env.AGENT_MAIL_BACKEND_URL;
   if (backend) {
     try {
-      const response = await fetch(new URL('/api/dashboard', backend));
+      const url = new URL('/api/dashboard', backend);
+      const folder = new URL(request.url).searchParams.get('folder');
+      if (folder) url.searchParams.set('folder', folder);
+      const response = await fetch(url);
       return new Response(response.body, {
         status: response.status,
         headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },

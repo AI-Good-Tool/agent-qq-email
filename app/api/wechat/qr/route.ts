@@ -10,7 +10,7 @@ function unavailableResponse() {
   );
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   const url = backendUrl('/api/auth/start');
   if (!url) {
     return Response.json(
@@ -19,7 +19,8 @@ export async function POST() {
     );
   }
   try {
-    const response = await fetch(url, { method: 'POST' });
+    const body = await request.text();
+    const response = await fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: body || '{}' });
     return new Response(response.body, {
       status: response.status,
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
