@@ -1,9 +1,25 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { App, Avatar, Badge, Button, ConfigProvider, Dropdown, Empty, Input, Layout, Menu, Modal, Result, Select, Space, Spin, Table, Tag, Tooltip } from 'antd';
 import type { MenuProps, TableColumnsType } from 'antd';
-import { BellOutlined, CheckCircleFilled, DownOutlined, InboxOutlined, MailOutlined, MoreOutlined, PlusOutlined, QrcodeOutlined, ReloadOutlined, SearchOutlined, SendOutlined, SettingOutlined, StarFilled, StarOutlined, TeamOutlined, UserOutlined, WechatFilled } from '@ant-design/icons';
+import BellOutlined from '@ant-design/icons/BellOutlined';
+import CheckCircleFilled from '@ant-design/icons/CheckCircleFilled';
+import DownOutlined from '@ant-design/icons/DownOutlined';
+import InboxOutlined from '@ant-design/icons/InboxOutlined';
+import MailOutlined from '@ant-design/icons/MailOutlined';
+import MoreOutlined from '@ant-design/icons/MoreOutlined';
+import PlusOutlined from '@ant-design/icons/PlusOutlined';
+import QrcodeOutlined from '@ant-design/icons/QrcodeOutlined';
+import ReloadOutlined from '@ant-design/icons/ReloadOutlined';
+import SearchOutlined from '@ant-design/icons/SearchOutlined';
+import SendOutlined from '@ant-design/icons/SendOutlined';
+import SettingOutlined from '@ant-design/icons/SettingOutlined';
+import StarFilled from '@ant-design/icons/StarFilled';
+import StarOutlined from '@ant-design/icons/StarOutlined';
+import TeamOutlined from '@ant-design/icons/TeamOutlined';
+import UserOutlined from '@ant-design/icons/UserOutlined';
+import WechatFilled from '@ant-design/icons/WechatFilled';
 import { QRCodeSVG } from 'qrcode.react';
 
 const { Header, Sider, Content } = Layout;
@@ -22,6 +38,7 @@ function formatTime(value:number) {
 }
 
 function MailDashboard(){
+  const isClient=useSyncExternalStore(()=>()=>{},()=>true,()=>false);
   const {message}=App.useApp();
   const [accountFilter,setAccountFilter]=useState('all');
   const [category,setCategory]=useState('all');
@@ -68,6 +85,7 @@ function MailDashboard(){
   },[qr.status,qr.sessionId,loadDashboard]);
 
   const filtered=useMemo(()=>mailRows.filter(mail=>{const q=search.trim().toLowerCase();return(accountFilter==='all'||mail.accountId===accountFilter)&&(category==='all'||mail.category===category)&&(status==='all'||(status==='unread'?mail.unread:mail.starred))&&(!q||`${mail.sender}${mail.subject}${mail.preview}`.toLowerCase().includes(q))}),[accountFilter,category,status,search,mailRows]);
+  if(!isClient)return <div style={{minHeight:'100vh',background:'#f6f8f7'}} aria-label="正在加载云邮盒"/>;
   const columns:TableColumnsType<MailItem>=[
     {title:'发件人',dataIndex:'sender',width:180,render:(_,row)=><div className="sender-cell"><Avatar size={30} style={{background:row.senderColor,fontSize:12}}>{row.senderInitial}</Avatar><span className="sender">{row.sender}</span></div>},
     {title:'主题与摘要',dataIndex:'subject',render:(_,row)=><div className="subject-line"><span className="subject">{row.subject}</span><span className="preview">— {row.preview}</span></div>},
