@@ -70,8 +70,8 @@ function MailDashboard(){
     const controller=new AbortController();
     fetch('/api/wechat/qr',{method:'POST',signal:controller.signal}).then(async response=>{
       const data=await response.json();
-      if(!response.ok){setQr({status:data.code==='WECHAT_NOT_CONFIGURED'?'config_error':'error',message:data.message});return}
-      setQr({status:'ready',qrUrl:data.qrUrl,sessionId:data.sessionId});
+      if(!response.ok){setQr({status:data.code?.startsWith('AGENT_MAIL_BACKEND_')?'config_error':'error',message:data.message});return}
+      setQr({status:'ready',qrUrl:data.authUrl,sessionId:data.sessionId});
     }).catch(error=>{if(error.name!=='AbortError')setQr({status:'error',message:'无法创建扫码会话，请稍后重试。'})});
     return()=>controller.abort();
   },[qrOpen]);
@@ -80,6 +80,7 @@ function MailDashboard(){
     const timer=window.setInterval(()=>fetch(`/api/wechat/qr?sessionId=${encodeURIComponent(qr.sessionId!)}`,{cache:'no-store'}).then(r=>r.json()).then(data=>{
       if(data.status==='confirmed'){window.clearInterval(timer);setQr({status:'success'});void loadDashboard();window.setTimeout(()=>setQrOpen(false),1200)}
       if(data.status==='expired'){window.clearInterval(timer);setQr({status:'error',message:'二维码已过期，请关闭后重新打开。'})}
+      if(data.status==='failed'){window.clearInterval(timer);setQr({status:'error',message:data.message||'官方登录程序已退出，请重新尝试。'})}
     }).catch(()=>undefined),1500);
     return()=>window.clearInterval(timer);
   },[qr.status,qr.sessionId,loadDashboard]);
@@ -108,11 +109,11 @@ function MailDashboard(){
         <section className="mail-card"><div className="toolbar"><div className="filter-group"><Select className="filter-select" value={accountFilter} onChange={setAccountFilter} options={[{value:'all',label:'全部微信账号'},...accountRows.map(a=>({value:a.id,label:a.name}))]}/><Select value={category} onChange={setCategory} options={[{value:'all',label:'全部类型'},{value:'工作',label:'工作'},{value:'订阅',label:'订阅'},{value:'账单',label:'账单'},{value:'通知',label:'通知'}]}/><Select value={status} onChange={setStatus} options={[{value:'all',label:'全部状态'},{value:'unread',label:'仅未读'},{value:'starred',label:'仅星标'}]}/><span style={{fontSize:11,color:'#9ba19e'}}>共 {filtered.length} 封</span></div><Space><Tooltip title="刷新数据"><Button loading={loading} icon={<ReloadOutlined/>} onClick={()=>void loadDashboard()}/></Tooltip><Dropdown disabled={!accountRows.length} menu={{items:accountMenu}}><Button>批量操作 <DownOutlined/></Button></Dropdown></Space></div><Table className="mail-table" rowKey="id" rowSelection={mailRows.length?{}:undefined} columns={columns} dataSource={filtered} loading={loading} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>还没有真实邮件<br/><small>连接微信并完成邮箱授权后，邮件会显示在这里</small></span>}/>}} pagination={filtered.length>7?{pageSize:7,showSizeChanger:false,placement:'bottomRight'}:false} rowClassName={row=>row.unread?'unread-row':''} scroll={{x:860}}/></section>
       </Content></Layout>
   </Layout>
-  <Modal className="qr-modal" open={qrOpen} onCancel={closeQr} footer={null} width={420} centered destroyOnHidden><div className="qr-modal-head"><h2><WechatFilled style={{color:'#17b26a',marginRight:9}}/>连接新的微信账号</h2><p>使用微信扫码登录，完成后再绑定该账号使用的邮箱。</p></div><div className="qr-body">
-    {qr.status==='loading'&&<div className="qr-loading"><Spin size="large"/><p>正在向微信申请二维码…</p></div>}
-    {qr.status==='ready'&&qr.qrUrl&&<><div className="qr-frame"><QRCodeSVG value={qr.qrUrl} size={172} level="H"/><div className="qr-logo"><WechatFilled/></div></div><div className="qr-status"><Badge status="processing"/> 等待微信扫码</div><div className="qr-help">二维码将在 5 分钟后失效</div><div className="security-note"><CheckCircleFilled style={{color:'#16a765'}}/> 微信授权凭证会加密保存，你可以随时解除连接。</div></>}
+  <Modal className="qr-modal" open={qrOpen} onCancel={closeQr} footer={null} width={420} centered destroyOnHidden><div className="qr-modal-head"><h2><WechatFilled style={{color:'#17b26a',marginRight:9}}/>连接新的微信账号</h2><p>使用微信扫码完成 Agent Mail 官方设备授权。</p></div><div className="qr-body">
+    {qr.status==='loading'&&<div className="qr-loading"><Spin size="large"/><p>正在启动 Agent Mail 官方登录…</p></div>}
+    {qr.status==='ready'&&qr.qrUrl&&<><div className="qr-frame"><QRCodeSVG value={qr.qrUrl} size={172} level="H"/><div className="qr-logo"><WechatFilled/></div></div><div className="qr-status"><Badge status="processing"/> 等待微信扫码</div><div className="qr-help">二维码将在 5 分钟后失效</div><div className="security-note"><CheckCircleFilled style={{color:'#16a765'}}/> 授权凭据由官方 CLI 安全保存在系统钥匙串。</div></>}
     {qr.status==='success'&&<Result status="success" title="微信连接成功" subTitle="正在刷新账号列表…"/>}
-    {qr.status==='config_error'&&<Result status="warning" title="微信连接尚未配置" subTitle="当前没有可用的微信开放平台凭证，因此不再展示无效的演示二维码。请管理员配置 AppID、AppSecret、授权回调地址和加密密钥。"/>}
+    {qr.status==='config_error'&&<Result status="warning" title="Agent Mail 服务尚未连接" subTitle="请先启动本机 Egg.js 服务。它会直接调用官方 agently-cli，不需要 AppID 或 AppSecret。"/>}
     {qr.status==='error'&&<Result status="error" title="无法创建微信连接" subTitle={qr.message||'请稍后重试。'} extra={<Button onClick={()=>{closeQr();window.setTimeout(openQr,0)}}>重新尝试</Button>}/>}
   </div></Modal>
   </div>;

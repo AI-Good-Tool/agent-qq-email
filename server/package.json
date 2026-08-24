@@ -1,0 +1,8 @@
+{
+  "name": "yunyouhe-agent-mail-server",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": { "dev": "egg-bin dev --port 7101", "start": "egg-scripts start --port=7101 --daemon --title=yunyouhe-agent-mail", "stop": "egg-scripts stop --title=yunyouhe-agent-mail" },
+  "dependencies": { "egg": "4.0.10", "egg-scripts": "3.1.0" },
+  "devDependencies": { "egg-bin": "6.13.0" }
+}

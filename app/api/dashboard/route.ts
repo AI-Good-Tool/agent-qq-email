@@ -2,6 +2,21 @@ import { env } from 'cloudflare:workers';
 import { ensureDatabase } from '../../../db/bootstrap';
 
 export async function GET(request: Request) {
+  const backend = process.env.AGENT_MAIL_BACKEND_URL;
+  if (backend) {
+    try {
+      const response = await fetch(new URL('/api/dashboard', backend));
+      return new Response(response.body, {
+        status: response.status,
+        headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+      });
+    } catch {
+      return Response.json(
+        { code: 'AGENT_MAIL_BACKEND_UNREACHABLE', message: '无法连接 Agent Mail 本地服务。' },
+        { status: 503 },
+      );
+    }
+  }
   const db = env.DB;
   await ensureDatabase(db);
   const url = new URL(request.url);
