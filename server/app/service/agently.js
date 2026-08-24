@@ -16,7 +16,6 @@ class AgentlyService extends Service {
     return {
       ...process.env,
       AGENTLY_WORKSPACE: this.config.agently.workspace,
-      PATH: `${this.config.agently.browserShimDir}:${process.env.PATH || ''}`,
     };
   }
 

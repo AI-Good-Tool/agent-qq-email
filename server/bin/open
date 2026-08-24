@@ -1,4 +1,0 @@
-#!/bin/sh
-# The web app renders the official authorization URL as an in-page QR code.
-# Returning success prevents agently-cli from opening a second browser window.
-exit 0

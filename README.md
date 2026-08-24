@@ -8,7 +8,7 @@ Agent Mail 聚合工作台，使用 React、Ant Design、Vinext、Egg.js 4 与 S
 - 发件人、主题和摘要搜索
 - 邮件按接收时间倒序排列，点击行后在当前页面读取完整正文和附件信息
 - 邮件类型、未读、星标组合筛选
-- 官方 CLI 设备 OAuth 登录、当前页二维码、授权状态轮询与 SQLite 快照
+- 官方 CLI 设备 OAuth 登录、电脑端官方授权窗口、授权状态轮询与 SQLite 快照
 - 官方接口分页读取全部邮件，CLI 暂时不可用时回退到最近一次 SQLite 快照
 - 响应式桌面/平板/移动端布局
 
@@ -39,7 +39,7 @@ Egg.js 默认监听 `7101`，前端默认运行在 `http://localhost:3000`。服
 
 ## 登录方式
 
-点击“扫码添加”时，Egg.js 会执行官方 `agently-cli auth login`，把 CLI 输出的原始 Agent Mail 授权 URL 转成二维码，并轮询 CLI 的完成状态。不需要微信开放平台 AppID 或 AppSecret。OAuth token 由官方 CLI 保存在系统钥匙串中，应用不会读取、复制或上传 token。
+点击“扫码添加”时，Egg.js 会执行官方 `agently-cli auth login`，由 CLI 在电脑打开 Agent Mail 官方授权页，并轮询 CLI 的完成状态。不需要微信开放平台 AppID 或 AppSecret。由于微信安全规则不支持同一台手机长按识别登录二维码，二维码必须显示在电脑或另一台设备上，再使用手机微信扫码。OAuth token 由官方 CLI 保存在系统钥匙串中，应用不会读取、复制或上传 token。
 
 ## 数据结构
 

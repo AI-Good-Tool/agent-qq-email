@@ -8,7 +8,6 @@ module.exports = appInfo => ({
   agently: {
     cliPath: process.env.AGENTLY_CLI_PATH || 'agently-cli',
     workspace: process.env.AGENTLY_WORKSPACE || 'codex',
-    browserShimDir: path.join(appInfo.baseDir, 'bin'),
     timeout: 30000,
     databasePath: process.env.AGENTLY_SQLITE_PATH || path.join(appInfo.baseDir, 'data', 'agent-mail.sqlite'),
   },
