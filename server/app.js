@@ -4,6 +4,7 @@ class AppBootHook {
   constructor(app) {
     this.app = app;
     this.app.authSessions = new Map();
+    this.app.loginAttempts = new Map();
   }
 
   async beforeClose() {

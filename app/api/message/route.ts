@@ -1,7 +1,4 @@
-function backendUrl(path: string) {
-  const origin = process.env.AGENT_MAIL_BACKEND_URL;
-  return origin ? new URL(path, origin) : null;
-}
+import { backendUrl, proxyHeaders } from '../_proxy';
 
 export async function GET(request: Request) {
   const id = new URL(request.url).searchParams.get('id');
@@ -19,7 +16,7 @@ export async function GET(request: Request) {
     );
   }
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, { headers:proxyHeaders(request) });
     return new Response(response.body, {
       status: response.status,
       headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },

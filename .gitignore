@@ -19,6 +19,12 @@
 # misc
 .DS_Store
 *.pem
+*.log
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+.idea/
+.vscode/
 
 # debug
 npm-debug.log*

@@ -98,8 +98,16 @@ class AgentlyService extends Service {
         starred_at INTEGER NOT NULL,
         PRIMARY KEY(workspace, message_id)
       );
+      CREATE TABLE IF NOT EXISTS mail_alias_labels (
+        workspace TEXT NOT NULL,
+        alias_id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        PRIMARY KEY(workspace, alias_id, label)
+      );
       CREATE INDEX IF NOT EXISTS idx_mail_aliases_connection ON mail_aliases(connection_id, email);
       CREATE INDEX IF NOT EXISTS idx_mail_messages_received ON mail_messages(folder, received_at DESC);
+      CREATE INDEX IF NOT EXISTS idx_mail_alias_labels_label ON mail_alias_labels(label);
     `);
     this.app.agentMailDatabase = db;
     return db;
@@ -174,7 +182,7 @@ class AgentlyService extends Service {
     this.saveWorkspaceSnapshot(workspace, meResult.data?.aliases || [], messages, folder);
   }
 
-  buildDashboard(folder, source) {
+  buildDashboard(folder, source, selectedAccountId = 'all') {
     const db = this.database();
     const connectionRows = db.prepare('SELECT * FROM mail_connections ORDER BY created_at').all();
     const aliasRows = db.prepare(`
@@ -186,7 +194,16 @@ class AgentlyService extends Service {
     `).all();
     const stars = new Set(db.prepare('SELECT workspace, message_id FROM message_stars').all()
       .map(item => `${item.workspace}:${item.message_id}`));
-    const messageRows = db.prepare(`
+    const aliasLabels = new Map();
+    for (const item of db.prepare('SELECT workspace, alias_id, label FROM mail_alias_labels ORDER BY created_at, label').all()) {
+      const key = `${item.workspace}:${item.alias_id}`;
+      if (!aliasLabels.has(key)) aliasLabels.set(key, []);
+      aliasLabels.get(key).push(item.label);
+    }
+    const selectedAlias = selectedAccountId === 'all' ? null : aliasRows.find(item => `${item.workspace}:${item.alias_id}` === selectedAccountId);
+    const messageRows = selectedAlias ? db.prepare(`
+      SELECT * FROM mail_messages WHERE folder = ? AND workspace = ? AND alias_id = ? ORDER BY received_at DESC
+    `).all(folder, selectedAlias.workspace, selectedAlias.alias_id) : db.prepare(`
       SELECT * FROM mail_messages WHERE folder = ? ORDER BY received_at DESC
     `).all(folder);
 
@@ -200,6 +217,7 @@ class AgentlyService extends Service {
       unread: Number(item.unread),
       color: COLORS[index % COLORS.length],
       status: source === 'agently-cli' ? 'online' : 'cached',
+      labels: aliasLabels.get(`${item.workspace}:${item.alias_id}`) || [],
     }));
     const connections = connectionRows.map((item, index) => {
       const linked = accounts.filter(account => account.connectionId === item.id);
@@ -223,7 +241,7 @@ class AgentlyService extends Service {
       subject: item.subject || '(无主题)',
       preview: item.snippet || '',
       accountId: `${item.workspace}:${item.alias_id}`,
-      category: folder === 'sent' ? '已发送' : '通知',
+      category: folder === 'sent' ? '已发送' : folder === 'trash' ? '垃圾箱' : '通知',
       receivedAt: new Date(item.received_at).getTime(),
       isRead: item.is_read ? 1 : 0,
       isStarred: stars.has(`${item.workspace}:${item.message_id}`) ? 1 : 0,
@@ -248,23 +266,48 @@ class AgentlyService extends Service {
       },
       source,
       folder,
+      selectedAccountId: selectedAlias ? `${selectedAlias.workspace}:${selectedAlias.alias_id}` : 'all',
     };
   }
 
-  async dashboard(folder = 'inbox') {
-    if (![ 'inbox', 'sent' ].includes(folder)) folder = 'inbox';
+  async dashboard(folder = 'inbox', requestedAccount = 'default') {
+    if (![ 'inbox', 'sent', 'trash' ].includes(folder)) folder = 'inbox';
     this.ensureInitialWorkspace();
-    const workspaces = this.database().prepare('SELECT workspace FROM mail_auth_workspaces ORDER BY created_at').all();
-    let synced = 0;
-    for (const item of workspaces) {
+    const db = this.database();
+    const workspaces = db.prepare('SELECT workspace FROM mail_auth_workspaces ORDER BY created_at').all();
+    let selectedAccountId = requestedAccount || 'default';
+    let selectedAlias = selectedAccountId === 'all' ? null : db.prepare(`
+      SELECT workspace, alias_id FROM mail_aliases
+      WHERE workspace || ':' || alias_id = ?
+    `).get(selectedAccountId);
+    if (selectedAccountId !== 'all' && !selectedAlias) {
+      selectedAlias = db.prepare(`
+        SELECT workspace, alias_id FROM mail_aliases
+        ORDER BY connection_id, is_primary DESC, email LIMIT 1
+      `).get();
+      selectedAccountId = selectedAlias ? `${selectedAlias.workspace}:${selectedAlias.alias_id}` : 'default';
+    }
+    const workspacesToSync = selectedAccountId === 'all' ? workspaces : [
+      { workspace:selectedAlias?.workspace || workspaces[0]?.workspace },
+    ].filter(item => item.workspace);
+    const syncResults = await Promise.all(workspacesToSync.map(async item => {
       try {
         await this.syncWorkspace(item.workspace, folder);
-        synced++;
+        return true;
       } catch (error) {
         this.ctx.logger.warn('[agently] workspace %s sync failed: %s', item.workspace, error.message);
+        return false;
       }
+    }));
+    const synced = syncResults.filter(Boolean).length;
+    if (selectedAccountId === 'default') {
+      selectedAlias = db.prepare(`
+        SELECT workspace, alias_id FROM mail_aliases
+        ORDER BY connection_id, is_primary DESC, email LIMIT 1
+      `).get();
+      selectedAccountId = selectedAlias ? `${selectedAlias.workspace}:${selectedAlias.alias_id}` : 'all';
     }
-    const dashboard = this.buildDashboard(folder, synced ? 'agently-cli' : 'sqlite-cache');
+    const dashboard = this.buildDashboard(folder, synced ? 'agently-cli' : 'sqlite-cache', selectedAccountId);
     if (!synced && !dashboard.accounts.length) throw new Error('没有可用的 Agent Mail 授权。');
     return dashboard;
   }
@@ -296,18 +339,46 @@ class AgentlyService extends Service {
     return { ok: true, starred };
   }
 
+  setAliasLabels(workspace, aliasId, labels) {
+    this.assertWorkspace(workspace);
+    const db = this.database();
+    const alias = db.prepare('SELECT 1 FROM mail_aliases WHERE workspace = ? AND alias_id = ?').get(workspace, aliasId);
+    if (!alias) throw new Error('邮箱账号不存在。');
+    const normalized = Array.from(new Set((Array.isArray(labels) ? labels : [])
+      .map(label => String(label).trim())
+      .filter(Boolean)));
+    if (normalized.length > 8) throw new Error('每个邮箱最多设置 8 个标签。');
+    if (normalized.some(label => label.length > 16)) throw new Error('单个标签不能超过 16 个字符。');
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('DELETE FROM mail_alias_labels WHERE workspace = ? AND alias_id = ?').run(workspace, aliasId);
+      const insert = db.prepare('INSERT INTO mail_alias_labels (workspace, alias_id, label, created_at) VALUES (?, ?, ?, ?)');
+      const now = Date.now();
+      for (const label of normalized) insert.run(workspace, aliasId, label, now);
+      db.exec('COMMIT');
+    } catch (error) {
+      db.exec('ROLLBACK');
+      throw error;
+    }
+    return { ok: true, labels: normalized };
+  }
+
   async mailAction(payload) {
     const { action, workspace, body, confirmationToken } = payload;
     this.assertWorkspace(workspace);
-    if (!body?.trim()) throw new Error('邮件正文不能为空。');
     let args;
-    if (action === 'send') {
+    if (action === 'trash' || action === 'delete') {
+      if (!/^msg_[A-Za-z0-9_-]+$/.test(payload.messageId || '')) throw new Error('无效的邮件标识。');
+      args = [ 'message', action === 'trash' ? '+trash' : '+delete', '--id', payload.messageId ];
+    } else if (action === 'send') {
+      if (!body?.trim()) throw new Error('邮件正文不能为空。');
       const recipients = Array.isArray(payload.to) ? payload.to : String(payload.to || '').split(/[;,\s]+/).filter(Boolean);
       if (!recipients.length || !payload.subject?.trim()) throw new Error('请填写收件人和主题。');
       args = [ 'message', '+send' ];
       for (const recipient of recipients) args.push('--to', recipient);
       args.push('--subject', payload.subject.trim(), '--body', body.trim(), '--body-format', 'plain');
     } else if (action === 'reply') {
+      if (!body?.trim()) throw new Error('邮件正文不能为空。');
       if (!/^msg_[A-Za-z0-9_-]+$/.test(payload.messageId || '')) throw new Error('无效的回复邮件标识。');
       args = [ 'message', '+reply', '--id', payload.messageId, '--body', body.trim(), '--body-format', 'plain' ];
     } else {

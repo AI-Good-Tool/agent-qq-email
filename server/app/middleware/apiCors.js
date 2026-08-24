@@ -9,8 +9,8 @@ module.exports = () => async function apiCors(ctx, next) {
     ctx.set('Access-Control-Allow-Origin', origin);
     ctx.set('Vary', 'Origin');
   }
-  ctx.set('Access-Control-Allow-Headers', 'content-type');
-  ctx.set('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
+  ctx.set('Access-Control-Allow-Headers', 'authorization,content-type');
+  ctx.set('Access-Control-Allow-Methods', 'GET,POST,PUT,OPTIONS');
   if (ctx.method === 'OPTIONS') {
     ctx.status = 204;
     return;
