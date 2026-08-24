@@ -12,11 +12,19 @@ const execFileAsync = promisify(execFile);
 const AUTH_LIFETIME_MS = 5 * 60 * 1000;
 
 class AgentlyService extends Service {
+  cliEnvironment() {
+    return {
+      ...process.env,
+      AGENTLY_WORKSPACE: this.config.agently.workspace,
+      PATH: `${this.config.agently.browserShimDir}:${process.env.PATH || ''}`,
+    };
+  }
+
   async run(args, timeout = this.config.agently.timeout) {
     const { stdout } = await execFileAsync(this.config.agently.cliPath, args, {
       timeout,
       maxBuffer: 10 * 1024 * 1024,
-      env: { ...process.env, AGENTLY_WORKSPACE: this.config.agently.workspace },
+      env: this.cliEnvironment(),
     });
     return JSON.parse(stdout.trim());
   }
@@ -85,16 +93,18 @@ class AgentlyService extends Service {
 
   toDashboard(aliases, messages, source) {
     const primary = aliases.find(item => item.is_primary) || aliases[0];
+    const sortedMessages = [ ...messages ].sort((left, right) =>
+      new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
     const accounts = aliases.map((item, index) => ({
       id: item.alias_id,
       name: item.name || item.email,
       email: item.email,
-      unread: messages.filter(message => !message.is_read
+      unread: sortedMessages.filter(message => !message.is_read
         && this.resolveAccount(message, aliases, primary)?.alias_id === item.alias_id).length,
       color: [ '#17b26a', '#6e7ed8', '#e79a3b', '#2e9e89' ][index % 4],
       status: source === 'agently-cli' ? 'online' : 'cached',
     }));
-    const emails = messages.map(item => ({
+    const emails = sortedMessages.map(item => ({
       id: item.message_id,
       sender: item.from?.name || item.from?.email || '未知发件人',
       senderAddress: item.from?.email || '',
@@ -201,6 +211,13 @@ class AgentlyService extends Service {
     }
   }
 
+  async readMessage(messageId) {
+    if (!/^msg_[A-Za-z0-9_-]+$/.test(messageId)) throw new Error('无效的邮件标识。');
+    const result = await this.run([ 'message', '+read', '--id', messageId ]);
+    if (!result.ok) throw new Error('Agent Mail CLI returned an unsuccessful response.');
+    return { ...result.data, source: 'agently-cli' };
+  }
+
   async startAuth() {
     const now = Date.now();
     for (const [ id, item ] of this.app.authSessions) {
@@ -225,7 +242,7 @@ class AgentlyService extends Service {
     this.app.authSessions.set(session.id, session);
 
     const child = spawn(this.config.agently.cliPath, [ 'auth', 'login' ], {
-      env: { ...process.env, AGENTLY_WORKSPACE: this.config.agently.workspace },
+      env: this.cliEnvironment(),
       stdio: [ 'ignore', 'pipe', 'pipe' ],
     });
     session.child = child;

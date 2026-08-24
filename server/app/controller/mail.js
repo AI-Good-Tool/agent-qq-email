@@ -16,6 +16,15 @@ class MailController extends Controller {
     }
   }
 
+  async messageDetail() {
+    try {
+      this.ctx.body = await this.service.agently.readMessage(this.ctx.params.id);
+    } catch (error) {
+      this.ctx.status = /^无效/.test(error.message) ? 400 : 503;
+      this.ctx.body = { code: 'MESSAGE_DETAIL_UNAVAILABLE', message: error.message };
+    }
+  }
+
   async startAuth() {
     const session = await this.service.agently.startAuth();
     this.ctx.status = session.status === 'failed' ? 503 : 200;

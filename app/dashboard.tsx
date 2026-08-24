@@ -24,9 +24,12 @@ import { QRCodeSVG } from 'qrcode.react';
 
 const { Header, Sider, Content } = Layout;
 type Account = { id:string; name:string; email:string|null; unread:number; color:string; initials:string; status:string };
-type MailItem = { id:string; sender:string; senderInitial:string; senderColor:string; subject:string; preview:string; accountId:string; category:'工作'|'订阅'|'账单'|'通知'; time:string; unread:boolean; starred:boolean };
+type MailItem = { id:string; sender:string; senderInitial:string; senderColor:string; subject:string; preview:string; accountId:string; category:'工作'|'订阅'|'账单'|'通知'; receivedAt:number; time:string; unread:boolean; starred:boolean };
 type Stats = { total:number; unread:number; accounts:number; today:number };
 type QrState = { status:'idle'|'loading'|'ready'|'success'|'config_error'|'error'; qrUrl?:string; sessionId?:string; message?:string };
+type MailAddress = { name?:string; email:string };
+type MailAttachment = { attachment_id?:string; filename:string; content_type?:string; size?:number; download_url?:string };
+type MailDetail = { message_id:string; subject:string; body:string; body_format?:string; created_at:string; from?:MailAddress; to?:MailAddress[]; cc?:MailAddress[]; attachments?:MailAttachment[] };
 
 const categoryColors:Record<string,string>={工作:'blue',订阅:'purple',账单:'orange',通知:'cyan'};
 const senderColors=['#5d78d6','#9b68c6','#d85858','#2e9e89','#b77d42'];
@@ -36,6 +39,19 @@ function formatTime(value:number) {
   if(date.toDateString()===now.toDateString()) return new Intl.DateTimeFormat('zh-CN',{hour:'2-digit',minute:'2-digit',hour12:false}).format(date);
   return new Intl.DateTimeFormat('zh-CN',{month:'numeric',day:'numeric'}).format(date);
 }
+
+function messageBodyText(detail:MailDetail|null) {
+  if(!detail?.body)return '（邮件正文为空）';
+  if(detail.body_format?.toUpperCase()!=='HTML')return detail.body;
+  const document=new DOMParser().parseFromString(detail.body,'text/html');
+  document.querySelectorAll('br').forEach(node=>node.replaceWith('\n'));
+  document.querySelectorAll('p,div,li,tr').forEach(node=>node.append('\n'));
+  return (document.body.textContent||'').replace(/\n{3,}/g,'\n\n').trim();
+}
+
+function addressText(address?:MailAddress) { return address?[address.name,address.email&&`<${address.email}>`].filter(Boolean).join(' '):'—' }
+function addressList(addresses?:MailAddress[]) { return addresses?.length?addresses.map(addressText).join('、'):'—' }
+function fileSize(value?:number) { if(!value)return '';if(value<1024)return `${value} B`;if(value<1024*1024)return `${(value/1024).toFixed(1)} KB`;return `${(value/1024/1024).toFixed(1)} MB` }
 
 function MailDashboard(){
   const isClient=useSyncExternalStore(()=>()=>{},()=>true,()=>false);
@@ -50,6 +66,10 @@ function MailDashboard(){
   const [mailRows,setMailRows]=useState<MailItem[]>([]);
   const [stats,setStats]=useState<Stats>({total:0,unread:0,accounts:0,today:0});
   const [qr,setQr]=useState<QrState>({status:'idle'});
+  const [detailOpen,setDetailOpen]=useState(false);
+  const [detailLoading,setDetailLoading]=useState(false);
+  const [detail,setDetail]=useState<MailDetail|null>(null);
+  const [detailError,setDetailError]=useState('');
 
   const loadDashboard=useCallback(async()=>{
     try{
@@ -57,13 +77,20 @@ function MailDashboard(){
       if(!response.ok) throw new Error('dashboard request failed');
       const data=await response.json();
       setAccountRows(data.accounts.map((item:{id:string;name:string;email:string|null;unread:number;color:string;status:string})=>({...item,unread:Number(item.unread),initials:item.name.slice(0,1)})));
-      setMailRows(data.emails.map((item:{id:string;sender:string;subject:string;preview:string;accountId:string;category:MailItem['category'];receivedAt:number;isRead:number;isStarred:number},index:number)=>({...item,senderInitial:item.sender.slice(0,1),senderColor:senderColors[index%senderColors.length],time:formatTime(item.receivedAt),unread:!Boolean(item.isRead),starred:Boolean(item.isStarred)})));
+      const rows:MailItem[]=data.emails.map((item:{id:string;sender:string;subject:string;preview:string;accountId:string;category:MailItem['category'];receivedAt:number;isRead:number;isStarred:number},index:number)=>({...item,senderInitial:item.sender.slice(0,1),senderColor:senderColors[index%senderColors.length],time:formatTime(item.receivedAt),unread:!Boolean(item.isRead),starred:Boolean(item.isStarred)}));
+      setMailRows(rows.sort((left,right)=>right.receivedAt-left.receivedAt));
       setStats({total:Number(data.stats?.total??0),unread:Number(data.stats?.unread??0),accounts:Number(data.stats?.accounts??0),today:Number(data.stats?.today??0)});
     }catch{message.error('无法读取邮箱数据，请稍后重试。')}finally{setLoading(false)}
   },[message]);
 
   const openQr=()=>{setQr({status:'loading'});setQrOpen(true)};
   const closeQr=()=>{setQrOpen(false);setQr({status:'idle'})};
+  const openMail=async(mail:MailItem)=>{
+    setDetailOpen(true);setDetailLoading(true);setDetail(null);setDetailError('');
+    try{const response=await fetch(`/api/message?id=${encodeURIComponent(mail.id)}`,{cache:'no-store'});const data=await response.json();if(!response.ok)throw new Error(data.message||'无法读取邮件详情。');setDetail(data)}
+    catch(error){setDetailError(error instanceof Error?error.message:'无法读取邮件详情。')}
+    finally{setDetailLoading(false)}
+  };
   useEffect(()=>{const timer=window.setTimeout(()=>void loadDashboard(),0);return()=>window.clearTimeout(timer)},[loadDashboard]);
   useEffect(()=>{
     if(!qrOpen)return;
@@ -93,7 +120,7 @@ function MailDashboard(){
     {title:'类型',dataIndex:'category',width:82,render:value=><Tag color={categoryColors[value]} variant="filled">{value}</Tag>},
     {title:'微信账号',dataIndex:'accountId',width:150,render:value=>{const item=accountRows.find(a=>a.id===value);return item?<Tag className="wechat-tag" style={{background:`${item.color}13`,color:item.color}}><span className="tag-dot" style={{background:item.color}}/>{item.name}</Tag>:<span>—</span>}},
     {title:'时间',dataIndex:'time',width:82,render:value=><span style={{color:'#929995',fontSize:11}}>{value}</span>},
-    {title:'',key:'actions',width:76,render:(_,row)=><Space size={4}><Tooltip title={row.starred?'取消星标':'添加星标'}><Button type="text" size="small" icon={row.starred?<StarFilled style={{color:'#f4aa28'}}/>:<StarOutlined/>}/></Tooltip><Button type="text" size="small" icon={<MoreOutlined/>}/></Space>},
+    {title:'',key:'actions',width:76,render:(_,row)=><Space size={4} onClick={event=>event.stopPropagation()}><Tooltip title={row.starred?'取消星标':'添加星标'}><Button type="text" size="small" icon={row.starred?<StarFilled style={{color:'#f4aa28'}}/>:<StarOutlined/>}/></Tooltip><Button type="text" size="small" icon={<MoreOutlined/>}/></Space>},
   ];
   const accountMenu:MenuProps['items']=accountRows.map(item=>({key:item.id,label:item.name}));
 
@@ -106,7 +133,7 @@ function MailDashboard(){
     <Layout className="main-layout"><Header className="topbar"><div><div className="breadcrumb-title">收件箱</div><div className="breadcrumb-sub">{stats.accounts?`${stats.accounts} 个微信账号`:'尚未连接微信'} · 数据已加密存储</div></div><div className="header-actions"><Input className="global-search" allowClear value={search} onChange={e=>setSearch(e.target.value)} prefix={<SearchOutlined style={{color:'#a4aba7'}}/>} placeholder="搜索发件人、主题或正文"/><Tooltip title="通知"><Button shape="circle" icon={<BellOutlined/>}/></Tooltip><div className="user-pill"><Avatar size={31} style={{background:'#20332a'}} icon={<UserOutlined/>}/><span style={{fontSize:12,fontWeight:650}}>管理台</span><DownOutlined style={{fontSize:9,color:'#999'}}/></div></div></Header>
       <Content className="main-content"><div className="hero-row"><div><h1>统一收件箱</h1><p>{stats.accounts?'查看所有已连接账号的真实邮件。':'连接微信账号，然后绑定邮箱开始同步。'}</p></div><Button type="primary" icon={<QrcodeOutlined/>} onClick={openQr}>添加微信账号</Button></div>
         <div className="stat-row"><div className="stat-card"><div className="stat-label">全部邮件</div><div className="stat-value">{stats.total}</div></div><div className="stat-card"><div className="stat-label">未读邮件</div><div className="stat-value">{stats.unread}</div></div><div className="stat-card"><div className="stat-label">已连接微信</div><div className="stat-value">{stats.accounts}</div></div><div className="stat-card"><div className="stat-label">今日邮件</div><div className="stat-value">{stats.today}</div></div></div>
-        <section className="mail-card"><div className="toolbar"><div className="filter-group"><Select className="filter-select" value={accountFilter} onChange={setAccountFilter} options={[{value:'all',label:'全部微信账号'},...accountRows.map(a=>({value:a.id,label:a.name}))]}/><Select value={category} onChange={setCategory} options={[{value:'all',label:'全部类型'},{value:'工作',label:'工作'},{value:'订阅',label:'订阅'},{value:'账单',label:'账单'},{value:'通知',label:'通知'}]}/><Select value={status} onChange={setStatus} options={[{value:'all',label:'全部状态'},{value:'unread',label:'仅未读'},{value:'starred',label:'仅星标'}]}/><span style={{fontSize:11,color:'#9ba19e'}}>共 {filtered.length} 封</span></div><Space><Tooltip title="刷新数据"><Button loading={loading} icon={<ReloadOutlined/>} onClick={()=>void loadDashboard()}/></Tooltip><Dropdown disabled={!accountRows.length} menu={{items:accountMenu}}><Button>批量操作 <DownOutlined/></Button></Dropdown></Space></div><Table className="mail-table" rowKey="id" rowSelection={mailRows.length?{}:undefined} columns={columns} dataSource={filtered} loading={loading} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>还没有真实邮件<br/><small>连接微信并完成邮箱授权后，邮件会显示在这里</small></span>}/>}} pagination={filtered.length>7?{pageSize:7,showSizeChanger:false,placement:'bottomRight'}:false} rowClassName={row=>row.unread?'unread-row':''} scroll={{x:860}}/></section>
+        <section className="mail-card"><div className="toolbar"><div className="filter-group"><Select className="filter-select" value={accountFilter} onChange={setAccountFilter} options={[{value:'all',label:'全部微信账号'},...accountRows.map(a=>({value:a.id,label:a.name}))]}/><Select value={category} onChange={setCategory} options={[{value:'all',label:'全部类型'},{value:'工作',label:'工作'},{value:'订阅',label:'订阅'},{value:'账单',label:'账单'},{value:'通知',label:'通知'}]}/><Select value={status} onChange={setStatus} options={[{value:'all',label:'全部状态'},{value:'unread',label:'仅未读'},{value:'starred',label:'仅星标'}]}/><span style={{fontSize:11,color:'#9ba19e'}}>共 {filtered.length} 封 · 最新优先</span></div><Space><Tooltip title="刷新数据"><Button loading={loading} icon={<ReloadOutlined/>} onClick={()=>void loadDashboard()}/></Tooltip><Dropdown disabled={!accountRows.length} menu={{items:accountMenu}}><Button>批量操作 <DownOutlined/></Button></Dropdown></Space></div><Table className="mail-table" rowKey="id" rowSelection={mailRows.length?{}:undefined} columns={columns} dataSource={filtered} loading={loading} locale={{emptyText:<Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={<span>还没有真实邮件<br/><small>连接微信并完成邮箱授权后，邮件会显示在这里</small></span>}/>}} pagination={filtered.length>7?{pageSize:7,showSizeChanger:false,placement:'bottomRight'}:false} rowClassName={row=>row.unread?'unread-row':''} onRow={row=>({onClick:event=>{const target=event.target as HTMLElement;if(!target.closest('button,a,.ant-checkbox-wrapper,.ant-checkbox'))void openMail(row)}})} scroll={{x:860}}/></section>
       </Content></Layout>
   </Layout>
   <Modal className="qr-modal" open={qrOpen} onCancel={closeQr} footer={null} width={420} centered destroyOnHidden><div className="qr-modal-head"><h2><WechatFilled style={{color:'#17b26a',marginRight:9}}/>连接新的微信账号</h2><p>使用微信扫码完成 Agent Mail 官方设备授权。</p></div><div className="qr-body">
@@ -116,6 +143,11 @@ function MailDashboard(){
     {qr.status==='config_error'&&<Result status="warning" title="Agent Mail 服务尚未连接" subTitle="请先启动本机 Egg.js 服务。它会直接调用官方 agently-cli，不需要 AppID 或 AppSecret。"/>}
     {qr.status==='error'&&<Result status="error" title="无法创建微信连接" subTitle={qr.message||'请稍后重试。'} extra={<Button onClick={()=>{closeQr();window.setTimeout(openQr,0)}}>重新尝试</Button>}/>}
   </div></Modal>
+  <Modal className="mail-detail-modal" open={detailOpen} onCancel={()=>setDetailOpen(false)} footer={null} width={760} centered destroyOnHidden>
+    {detailLoading&&<div className="mail-detail-loading"><Spin size="large"/><span>正在读取真实邮件内容…</span></div>}
+    {!detailLoading&&detailError&&<Result status="error" title="无法打开邮件" subTitle={detailError} extra={<Button onClick={()=>setDetailOpen(false)}>关闭</Button>}/>}
+    {!detailLoading&&detail&&<article className="mail-detail"><header><Tag color="green">{detail.body_format||'PLAIN'}</Tag><h2>{detail.subject||'(无主题)'}</h2><time>{new Intl.DateTimeFormat('zh-CN',{dateStyle:'long',timeStyle:'short'}).format(new Date(detail.created_at))}</time></header><div className="mail-meta"><div><span>发件人</span><strong>{addressText(detail.from)}</strong></div><div><span>收件人</span><strong>{addressList(detail.to)}</strong></div>{Boolean(detail.cc?.length)&&<div><span>抄送</span><strong>{addressList(detail.cc)}</strong></div>}</div><pre className="mail-body-text">{messageBodyText(detail)}</pre>{Boolean(detail.attachments?.length)&&<section className="mail-attachments"><h3>附件（{detail.attachments!.length}）</h3>{detail.attachments!.map((item,index)=><div className="mail-attachment" key={item.attachment_id||`${item.filename}-${index}`}><span>{item.filename}</span><small>{[item.content_type,fileSize(item.size)].filter(Boolean).join(' · ')}</small></div>)}</section>}</article>}
+  </Modal>
   </div>;
 }
 
