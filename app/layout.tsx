@@ -8,7 +8,7 @@ const geistSans = Geist({
 });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.SITE_ORIGIN ?? 'http://localhost:3000'),
+  metadataBase: new URL(process.env.SITE_ORIGIN ?? 'https://yunyouhe-mailbox.lidalong2.chatgpt.site'),
   title: '云邮盒 · 多微信邮箱管理',
   description: '聚合多个微信账号下的邮箱，在一个工作台中统一检索、筛选与处理。',
   openGraph: {
