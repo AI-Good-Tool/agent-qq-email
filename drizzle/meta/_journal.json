@@ -8,6 +8,13 @@
       "when": 1787539689345,
       "tag": "0000_lonely_madripoor",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1787541440641,
+      "tag": "0001_bouncy_mimic",
+      "breakpoints": true
     }
   ]
 }

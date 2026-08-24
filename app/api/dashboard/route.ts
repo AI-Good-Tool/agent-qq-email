@@ -17,10 +17,11 @@ export async function GET(request: Request) {
   if (status === 'starred') clauses.push('e.is_starred = 1');
   if (search) { clauses.push('(e.sender_name LIKE ? OR e.subject LIKE ? OR e.preview LIKE ?)'); const pattern=`%${search}%`; values.push(pattern,pattern,pattern); }
   const where = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
+  const shanghaiDayStart = Math.floor((Date.now() + 8 * 60 * 60 * 1000) / 86_400_000) * 86_400_000 - 8 * 60 * 60 * 1000;
   const [accountResult,emailResult,stats] = await Promise.all([
     db.prepare(`SELECT a.id, a.nickname AS name, a.email, a.avatar_color AS color, a.status, COUNT(CASE WHEN e.is_read = 0 THEN 1 END) AS unread FROM wechat_accounts a LEFT JOIN emails e ON e.wechat_account_id = a.id GROUP BY a.id ORDER BY a.created_at`).all(),
     db.prepare(`SELECT e.id, e.sender_name AS sender, e.subject, e.preview, e.wechat_account_id AS accountId, e.category, e.received_at AS receivedAt, e.is_read AS isRead, e.is_starred AS isStarred FROM emails e ${where} ORDER BY e.received_at DESC LIMIT 200`).bind(...values).all(),
-    db.prepare('SELECT COUNT(*) AS total, COUNT(CASE WHEN is_read = 0 THEN 1 END) AS unread FROM emails').first(),
+    db.prepare('SELECT COUNT(*) AS total, COUNT(CASE WHEN is_read = 0 THEN 1 END) AS unread, COUNT(CASE WHEN received_at >= ? THEN 1 END) AS today, (SELECT COUNT(*) FROM wechat_accounts) AS accounts FROM emails').bind(shanghaiDayStart).first(),
   ]);
   return Response.json({ accounts:accountResult.results, emails:emailResult.results, stats });
 }

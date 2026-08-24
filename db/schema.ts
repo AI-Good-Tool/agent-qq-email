@@ -1,13 +1,14 @@
 import { index, integer, sqliteTable, text, uniqueIndex } from 'drizzle-orm/sqlite-core';
 
 export const wechatAccounts = sqliteTable('wechat_accounts', {
-  id: text('id').primaryKey(), nickname: text('nickname').notNull(), email: text('email').notNull(),
+  id: text('id').primaryKey(), nickname: text('nickname').notNull(), email: text('email'),
+  openid: text('openid').notNull(), unionid: text('unionid'),
   avatarColor: text('avatar_color').notNull().default('#17b26a'),
   status: text('status', { enum: ['online','offline','expired'] }).notNull().default('online'),
   refreshTokenEncrypted: text('refresh_token_encrypted'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
   lastSyncedAt: integer('last_synced_at', { mode: 'timestamp_ms' }),
-}, table => [uniqueIndex('idx_wechat_accounts_email').on(table.email), index('idx_wechat_accounts_status').on(table.status)]);
+}, table => [uniqueIndex('idx_wechat_accounts_email').on(table.email), uniqueIndex('idx_wechat_accounts_openid').on(table.openid), index('idx_wechat_accounts_status').on(table.status)]);
 
 export const emails = sqliteTable('emails', {
   id: text('id').primaryKey(),
