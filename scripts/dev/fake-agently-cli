@@ -1,0 +1,130 @@
+#!/usr/bin/env python3
+"""本地演示/测试用的 agently-cli 替身，模拟官方 CLI 的 JSON 输出。
+
+用法：AGENTLY_CLI_PATH=scripts/dev/fake-agently-cli python run.py
+状态保存在 FAKE_AGENTLY_STATE（默认 data/fake-agently.json），按 AGENTLY_WORKSPACE 区分账号。
+"""
+import json
+import os
+import sys
+import time
+from datetime import datetime, timedelta, timezone
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+STATE = os.environ.get("FAKE_AGENTLY_STATE") or os.path.join(ROOT, "data", "fake-agently.json")
+WORKSPACE = os.environ.get("AGENTLY_WORKSPACE", "default")
+
+SAMPLES = [
+    ("林一舟", "yizhou@example.com", "季度复盘会议纪要", "附上本周复盘会议的纪要，请在周五前补充各自负责的部分。", "plain"),
+    ("GitHub", "noreply@github.com", "[agentqq] New pull request opened", "A new pull request was opened: Improve mailbox sync performance.", "html"),
+    ("周可", "zhouke@example.com", "下周出差行程确认", "机票和酒店已经订好，行程单在附件里，麻烦确认一下时间。", "plain"),
+    ("云服务账单", "billing@example.com", "您的 10 月账单已生成", "本月消费 128.40 元，已从余额中扣除。点击查看账单明细。", "html"),
+    ("陈思远", "siyuan@example.com", "Re: 设计稿第二版", "第二版改得不错，导航那里还可以再简化一点，其余没有问题。", "plain"),
+    ("Newsletter", "hello@example.com", "本周阅读推荐：慢下来的力量", "我们为你精选了五篇关于专注与深度工作的文章。", "html"),
+]
+
+
+def load():
+    try:
+        with open(STATE, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return {}
+
+
+def save(state):
+    os.makedirs(os.path.dirname(STATE), exist_ok=True)
+    with open(STATE, "w", encoding="utf-8") as fh:
+        json.dump(state, fh, ensure_ascii=False, indent=1)
+
+
+def out(payload, code=0):
+    print(json.dumps(payload, ensure_ascii=False))
+    sys.exit(code)
+
+
+def account(state):
+    acc = state.get(WORKSPACE)
+    if acc is None:
+        out({"ok": False, "error": {"type": "auth", "message": "not logged in"}}, 1)
+    return acc
+
+
+def seed(index):
+    user = "demo%d" % index
+    aliases = [{"alias_id": "alias_%s_main" % user, "email": "%s@agent.qq.com" % user, "name": user, "is_primary": True}]
+    if index == 1:
+        aliases.append({"alias_id": "alias_%s_work" % user, "email": "work.%s@agent.qq.com" % user, "name": "工作邮箱", "is_primary": False})
+    now = datetime.now(timezone.utc)
+    messages = []
+    for i, (name, email, subject, snippet, fmt) in enumerate(SAMPLES):
+        to = aliases[i % len(aliases)]
+        messages.append({
+            "message_id": "msg_%s_%d" % (user, i), "dir": "inbox",
+            "from": {"name": name, "email": email}, "to": [{"name": to["name"], "email": to["email"]}],
+            "subject": subject, "snippet": snippet, "is_read": i > 2, "has_attachments": i == 2,
+            "created_at": (now - timedelta(hours=i * 7 + 1)).isoformat().replace("+00:00", "Z"), "format": fmt,
+        })
+    return {"aliases": aliases, "messages": messages}
+
+
+def main(argv):
+    state = load()
+    if argv[:2] == ["auth", "login"]:
+        print("请在浏览器中打开以下地址完成授权：", flush=True)
+        print("https://agent.qq.com/oauth/authorize?demo=%s" % WORKSPACE, flush=True)
+        time.sleep(float(os.environ.get("FAKE_AGENTLY_LOGIN_DELAY", "6")))
+        state[WORKSPACE] = seed(len(state) + 1)
+        save(state)
+        out({"ok": True})
+    if argv[:2] == ["auth", "logout"]:
+        state.pop(WORKSPACE, None)
+        save(state)
+        out({"ok": True})
+    acc = account(state)
+    if argv == ["+me"]:
+        out({"ok": True, "data": {"aliases": acc["aliases"]}})
+    if argv[:2] == ["message", "+list"]:
+        folder = argv[argv.index("--dir") + 1] if "--dir" in argv else "inbox"
+        items = [m for m in acc["messages"] if m["dir"] == folder]
+        out({"ok": True, "data": {"data": items, "pagination": {"has_more": False}}})
+    opt = lambda name: argv[argv.index(name) + 1] if name in argv else None  # noqa: E731
+    if argv[:2] == ["message", "+read"]:
+        msg = next((m for m in acc["messages"] if m["message_id"] == opt("--id")), None)
+        if not msg:
+            out({"ok": False, "error": {"type": "not_found", "message": "邮件不存在"}}, 1)
+        msg["is_read"] = True
+        save(state)
+        body = msg["snippet"] + "\n\n- 第一项要点\n- 第二项要点\n\n祝好，\n" + msg["from"]["name"]
+        if msg["format"] == "html":
+            body = ("<html><head><style>.mobile{display:none}</style></head><body><div class='preheader' style='display:none'>预览文字</div>"
+                    "<table><tr><td><h1>%s</h1><p>%s</p><p><a href='https://example.com/detail'>查看详情</a></p>"
+                    "<table><tr><th>项目</th><th>金额</th></tr><tr><td>云服务器</td><td>98.40</td></tr><tr><td>对象存储</td><td>30.00</td></tr></table>"
+                    "<script>alert(1)</script><img src=x onerror=alert(1) alt='logo'></td></tr></table></body></html>") % (msg["subject"], msg["snippet"])
+        out({"ok": True, "data": {"message_id": msg["message_id"], "subject": msg["subject"], "body": body,
+                                  "body_format": msg["format"].upper(), "created_at": msg["created_at"], "from": msg["from"],
+                                  "to": msg["to"], "cc": [],
+                                  "attachments": [{"filename": "行程单.pdf", "content_type": "application/pdf", "size": 182044}] if msg["has_attachments"] else []}})
+    if argv[:2] in (["message", "+send"], ["message", "+reply"], ["message", "+trash"], ["message", "+delete"]):
+        if not opt("--confirmation-token"):
+            out({"ok": True, "data": {"confirmation_required": True, "confirmation_token": "tok_%d" % int(time.time()),
+                                      "summary": {"from": acc["aliases"][0]["email"], "to": [a for i, a in enumerate(argv) if i and argv[i - 1] == "--to"], "subject": opt("--subject")}}})
+        if argv[1] == "+trash":
+            for m in acc["messages"]:
+                if m["message_id"] == opt("--id"):
+                    m["dir"] = "trash"
+        elif argv[1] == "+delete":
+            acc["messages"] = [m for m in acc["messages"] if m["message_id"] != opt("--id")]
+        else:
+            alias = acc["aliases"][0]
+            acc["messages"].append({"message_id": "msg_sent_%d" % int(time.time() * 1000), "dir": "sent", "from": {"name": alias["name"], "email": alias["email"]},
+                                    "to": [{"email": a} for i, a in enumerate(argv) if i and argv[i - 1] == "--to"] or [{"email": "reply@example.com"}],
+                                    "subject": opt("--subject") or "Re: 回复", "snippet": (opt("--body") or "")[:80], "is_read": True,
+                                    "has_attachments": False, "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"), "format": "plain"})
+        save(state)
+        out({"ok": True, "data": {"status": "queued"}})
+    out({"ok": False, "error": {"type": "usage", "message": "unknown command: %s" % " ".join(argv)}}, 2)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

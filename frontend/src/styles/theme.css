@@ -1,0 +1,133 @@
+/*
+ * 云邮盒视觉主题：暖色纸张底 + 赤陶色强调 + 衬线标题，参考 Claude 的克制风格。
+ * 自定义变量以 --yy- 开头；同时覆盖 Arco 的主色与灰阶，让组件库风格保持一致。
+ */
+:root {
+  --yy-bg: #faf9f5;
+  --yy-sidebar: #f3f1ea;
+  --yy-surface: #ffffff;
+  --yy-surface-2: #f5f4ee;
+  --yy-border: #e8e5da;
+  --yy-border-strong: #d9d5c7;
+  --yy-text: #1f1e1c;
+  --yy-text-2: #3d3c38;
+  --yy-text-3: #73716a;
+  --yy-text-4: #9d9a91;
+  --yy-accent: #c96442;
+  --yy-accent-hover: #b5573a;
+  --yy-accent-soft: #f6e8e1;
+  --yy-accent-text: #a8502f;
+  --yy-hover: rgba(31, 30, 28, 0.045);
+  --yy-active: rgba(31, 30, 28, 0.08);
+  --yy-shadow: 0 1px 2px rgba(31, 30, 28, 0.04), 0 4px 16px rgba(31, 30, 28, 0.05);
+  --yy-shadow-lg: 0 2px 6px rgba(31, 30, 28, 0.05), 0 12px 40px rgba(31, 30, 28, 0.08);
+  --yy-success: #5f8a4e;
+  --yy-warning: #c08a3e;
+  --yy-danger: #c2493d;
+  --yy-radius: 12px;
+  --yy-serif: "Tiempos Headline", "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", "STSong", serif;
+  --yy-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Noto Sans SC", system-ui, sans-serif;
+  --yy-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  --yy-bg: #262624;
+  --yy-sidebar: #1f1e1d;
+  --yy-surface: #30302e;
+  --yy-surface-2: #2b2a27;
+  --yy-border: #3d3c37;
+  --yy-border-strong: #4c4a44;
+  --yy-text: #f3f1ea;
+  --yy-text-2: #d8d5cc;
+  --yy-text-3: #a6a39a;
+  --yy-text-4: #7d7a72;
+  --yy-accent: #d97757;
+  --yy-accent-hover: #e38b6d;
+  --yy-accent-soft: rgba(217, 119, 87, 0.16);
+  --yy-accent-text: #e8957a;
+  --yy-hover: rgba(255, 255, 255, 0.05);
+  --yy-active: rgba(255, 255, 255, 0.09);
+  --yy-shadow: 0 1px 2px rgba(0, 0, 0, 0.2), 0 4px 16px rgba(0, 0, 0, 0.18);
+  --yy-shadow-lg: 0 2px 6px rgba(0, 0, 0, 0.25), 0 16px 48px rgba(0, 0, 0, 0.35);
+  --yy-success: #8db67a;
+  --yy-warning: #d9a65a;
+  --yy-danger: #e07065;
+  color-scheme: dark;
+}
+
+/* ---------- Arco 主色（赤陶）与暖灰 ---------- */
+body {
+  --arcoblue-1: 252, 243, 239;
+  --arcoblue-2: 246, 225, 215;
+  --arcoblue-3: 238, 196, 177;
+  --arcoblue-4: 226, 163, 135;
+  --arcoblue-5: 214, 131, 98;
+  --arcoblue-6: 201, 100, 66;
+  --arcoblue-7: 176, 83, 54;
+  --arcoblue-8: 146, 66, 41;
+  --arcoblue-9: 112, 49, 30;
+  --arcoblue-10: 80, 34, 20;
+  --gray-1: 245, 244, 237;
+  --gray-2: 240, 238, 230;
+  --gray-3: 232, 229, 218;
+  --gray-4: 214, 210, 197;
+  --gray-5: 184, 181, 170;
+  --gray-6: 156, 154, 146;
+  --gray-7: 115, 113, 106;
+  --gray-8: 87, 86, 80;
+  --gray-9: 61, 60, 56;
+  --gray-10: 31, 30, 28;
+  --color-bg-1: #ffffff;
+  --color-bg-2: #ffffff;
+  --color-bg-3: #ffffff;
+  --color-bg-4: #ffffff;
+  --color-bg-5: #ffffff;
+  --color-bg-popup: #ffffff;
+  --border-radius-small: 6px;
+  --border-radius-medium: 8px;
+  --border-radius-large: 12px;
+  font-family: var(--yy-sans);
+}
+
+body[arco-theme="dark"] {
+  --arcoblue-1: 66, 40, 31;
+  --arcoblue-2: 92, 52, 38;
+  --arcoblue-3: 125, 66, 46;
+  --arcoblue-4: 164, 84, 57;
+  --arcoblue-5: 198, 104, 72;
+  --arcoblue-6: 217, 119, 87;
+  --arcoblue-7: 227, 145, 117;
+  --arcoblue-8: 236, 172, 150;
+  --arcoblue-9: 244, 203, 188;
+  --arcoblue-10: 250, 231, 224;
+  --gray-1: 38, 38, 36;
+  --gray-2: 48, 48, 46;
+  --gray-3: 64, 63, 59;
+  --gray-4: 84, 83, 78;
+  --gray-5: 110, 108, 102;
+  --gray-6: 138, 136, 129;
+  --gray-7: 166, 163, 154;
+  --gray-8: 196, 193, 184;
+  --gray-9: 222, 220, 212;
+  --gray-10: 243, 241, 234;
+  --color-bg-1: #262624;
+  --color-bg-2: #30302e;
+  --color-bg-3: #30302e;
+  --color-bg-4: #363633;
+  --color-bg-5: #3b3b38;
+  --color-bg-popup: #33332f;
+  --color-text-1: #f3f1ea;
+  --color-text-2: #d8d5cc;
+  --color-text-3: #a6a39a;
+  --color-text-4: #7d7a72;
+  --color-border: #3d3c37;
+  --color-border-1: #3d3c37;
+  --color-border-2: #4a4843;
+  --color-border-3: #57554f;
+  --color-border-4: #67655e;
+  --color-fill-1: rgba(255, 255, 255, 0.04);
+  --color-fill-2: rgba(255, 255, 255, 0.07);
+  --color-fill-3: rgba(255, 255, 255, 0.1);
+  --color-fill-4: rgba(255, 255, 255, 0.13);
+}
